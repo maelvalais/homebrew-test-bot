@@ -957,6 +957,7 @@ module Homebrew
       Tap.names.each do |tap|
         next if tap == "homebrew/core"
         next if tap == "homebrew/test-bot"
+        next if tap == "davidchall/test-bot"
         next if tap == @tap.to_s
         test "brew", "untap", tap
       end
@@ -1203,6 +1204,8 @@ module Homebrew
       quiet_system "git", "rebase", "--abort"
       safe_system "git", "checkout", "-f", "master"
       safe_system "git", "reset", "--hard", "origin/master"
+      ENV.delete("GIT_WORK_TREE")
+      ENV.delete("GIT_DIR")
       safe_system "brew", "update"
     end
 
@@ -1284,7 +1287,9 @@ module Homebrew
             package_blob = <<-EOS.undent
               {"name": "#{bintray_package}",
                "public_download_numbers": true,
-               "public_stats": true}
+               "public_stats": true,
+               "licenses": ["Unlicense"],
+               "vcs_url": "https://github.com/#{tap.user}/homebrew-#{tap.repo}.git"}
             EOS
             if ARGV.include?("--dry-run")
               puts <<-EOS.undent
@@ -1304,15 +1309,21 @@ module Homebrew
         end
 
         content_url = "https://api.bintray.com/content/#{bintray_org}"
-        content_url += "/#{bintray_repo}/#{bintray_package}/#{version}/#{filename}"
+        content_url += "/#{bintray_repo}/#{filename}"
         if ARGV.include?("--dry-run")
           puts <<-EOS.undent
             curl --user $BINTRAY_USER:$BINTRAY_KEY
+                 --header X-Bintray-Package:#{bintray_package}
+                 --header X-Bintray-Version:#{version}
+                 --header X-Bintray-Publish:1
                  --upload-file #{filename}
                  #{content_url}
           EOS
         else
           curl "--user", "#{bintray_user}:#{bintray_key}",
+               "--header", "X-Bintray-Package:#{bintray_package}",
+               "--header", "X-Bintray-Version:#{version}",
+               "--header", "X-Bintray-Publish:1",
                "--upload-file", filename, content_url
           puts
         end
