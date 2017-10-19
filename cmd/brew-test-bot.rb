@@ -336,7 +336,7 @@ module Homebrew
       @tap = options[:tap]
       if @tap
         @repository = @tap.path
-        @test_bot_tap = @tap.to_s == "homebrew/test-bot"
+        @test_bot_tap = @tap.repo.to_s == "test-bot"
       else
         @repository = HOMEBREW_REPOSITORY
       end
@@ -961,8 +961,7 @@ module Homebrew
 
       Tap.names.each do |tap|
         next if tap == "homebrew/core"
-        next if tap == "homebrew/test-bot"
-        next if tap == "davidchall/test-bot"
+        next if tap.repo == "test-bot"
         next if tap == @tap.to_s
         test "brew", "untap", tap
       end
@@ -1034,7 +1033,7 @@ module Homebrew
       if ENV["TRAVIS"]
         # For Travis CI build caching.
         test "brew", "install", "md5deep", "libyaml" if OS.mac?
-        return if @tap && @tap.to_s != "homebrew/test-bot"
+        return if @tap && @tap.repo.to_s != "test-bot"
       end
 
       unless @start_branch.to_s.empty?
@@ -1193,24 +1192,19 @@ module Homebrew
     first_formula_name = bottles_hash.keys.first
     tap = Tap.fetch(first_formula_name.rpartition("/").first.chuzzle || "homebrew/core")
 
-    ENV["GIT_WORK_TREE"] = tap.path
-    ENV["GIT_DIR"] = "#{ENV["GIT_WORK_TREE"]}/.git"
-
     if ARGV.include?("--dry-run")
       puts <<-EOS.undent
-        git am --abort
-        git rebase --abort
-        git checkout -f master
-        git reset --hard origin/master
+        git -C #{tap.path} am --abort
+        git -C #{tap.path} rebase --abort
+        git -C #{tap.path} checkout -f master
+        git -C #{tap.path} reset --hard origin/master
         brew update
       EOS
     else
-      quiet_system "git", "am", "--abort"
-      quiet_system "git", "rebase", "--abort"
-      safe_system "git", "checkout", "-f", "master"
-      safe_system "git", "reset", "--hard", "origin/master"
-      ENV.delete("GIT_WORK_TREE")
-      ENV.delete("GIT_DIR")
+      quiet_system "git", "-C", tap.path, "am", "--abort"
+      quiet_system "git", "-C", tap.path, "rebase", "--abort"
+      safe_system "git", "-C", tap.path, "checkout", "-f", "master"
+      safe_system "git", "-C", tap.path, "reset", "--hard", "origin/master"
       safe_system "brew", "update"
     end
 
