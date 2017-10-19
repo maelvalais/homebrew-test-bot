@@ -426,6 +426,8 @@ module Homebrew
       # Use Travis CI Git variables for master or branch jobs.
       elsif ENV["TRAVIS_COMMIT_RANGE"]
         diff_start_sha1, diff_end_sha1 = ENV["TRAVIS_COMMIT_RANGE"].split "..."
+        puts diff_start_sha1
+        puts diff_end_sha1
       # Use Jenkins Pipeline plugin variables for branch jobs
       elsif ENV["JENKINS_HOME"] && !ENV["CHANGE_URL"] && ENV["CHANGE_TARGET"]
         diff_start_sha1 =
@@ -518,6 +520,9 @@ module Homebrew
         ).strip
         puts "#{@tap} HEAD #{tap_revision}"
       end
+
+      puts diff_start_sha1
+      puts diff_end_sha1
 
       return unless diff_start_sha1 != diff_end_sha1
       return if @url && steps.last && !steps.last.passed?
