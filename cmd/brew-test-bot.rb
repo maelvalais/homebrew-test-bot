@@ -961,7 +961,7 @@ module Homebrew
 
       Tap.names.each do |tap|
         next if tap == "homebrew/core"
-        next if tap.end_with?("test-bot")
+        next if tap.end_with?("/test-bot")
         next if tap == @tap.to_s
         test "brew", "untap", tap
       end
