@@ -426,8 +426,6 @@ module Homebrew
       # Use Travis CI Git variables for master or branch jobs.
       elsif ENV["TRAVIS_COMMIT_RANGE"]
         diff_start_sha1, diff_end_sha1 = ENV["TRAVIS_COMMIT_RANGE"].split "..."
-        puts diff_start_sha1
-        puts diff_end_sha1
       # Use Jenkins Pipeline plugin variables for branch jobs
       elsif ENV["JENKINS_HOME"] && !ENV["CHANGE_URL"] && ENV["CHANGE_TARGET"]
         diff_start_sha1 =
@@ -527,11 +525,20 @@ module Homebrew
       return unless diff_start_sha1 != diff_end_sha1
       return if @url && steps.last && !steps.last.passed?
 
+      puts diff_start_sha1
+      puts diff_end_sha1
+
       if @tap && !@test_bot_tap
         formula_path = @tap.formula_dir.to_s
         @added_formulae += diff_formulae(diff_start_sha1, diff_end_sha1, formula_path, "A")
         @modified_formulae += diff_formulae(diff_start_sha1, diff_end_sha1, formula_path, "M")
         @deleted_formulae += diff_formulae(diff_start_sha1, diff_end_sha1, formula_path, "D")
+
+        puts formula_path
+        @modified_formulae.each do |f|
+          puts f
+        end
+
         unless @modified_formulae.empty?
           or_later_diff = Utils.popen_read(
             "git", "-C", @repository, "diff",
@@ -550,6 +557,10 @@ module Homebrew
       end
 
       @formulae += @added_formulae + @modified_formulae
+
+      @formulae.each do |f|
+        puts f
+      end
     end
 
     def skip(formula_name)
