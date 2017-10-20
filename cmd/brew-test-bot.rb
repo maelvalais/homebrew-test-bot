@@ -624,7 +624,7 @@ module Homebrew
       bottle_args << "--keep-old" if ARGV.include?("--keep-old") && !new_formula
       bottle_args << "--skip-relocation" if ARGV.include? "--skip-relocation"
       bottle_args << "--force-core-tap" if @test_default_formula
-      bottle_args << "--root-url=#{ENV["HOMEBREW_BOTTLE_DOMAIN"]}/#{Utils::Bottles::Bintray.repository(formula.tap)}" if ENV["HOMEBREW_BOTTLE_DOMAIN"]
+      bottle_args << "--root-url=#{ENV["TAP_BOTTLE_DOMAIN"]}/#{Utils::Bottles::Bintray.repository(formula.tap)}" if !ENV["TAP_BOTTLE_DOMAIN"].nil?
       test "brew", "bottle", *bottle_args
       bottle_step = steps.last
       return unless bottle_step.passed?
@@ -1245,14 +1245,14 @@ module Homebrew
 
     bottles_hash.each do |formula_name, bottle_hash|
       version = bottle_hash["formula"]["pkg_version"]
+      root_url = bottle_hash["bottle"]["root_url"]
       bintray_package = bottle_hash["bintray"]["package"]
       bintray_repo = bottle_hash["bintray"]["repository"]
       bintray_packages_url = "https://api.bintray.com/packages/#{bintray_org}/#{bintray_repo}"
 
       bottle_hash["bottle"]["tags"].each do |_tag, tag_hash|
         filename = tag_hash["filename"]
-        bintray_filename_url =
-          "#{BottleSpecification::DEFAULT_DOMAIN}/#{bintray_repo}/#{filename}"
+        bintray_filename_url = "#{root_url}/#{filename}"
         filename_already_published = if ARGV.include?("--dry-run")
           puts "curl -I --output /dev/null #{bintray_filename_url}"
           false
