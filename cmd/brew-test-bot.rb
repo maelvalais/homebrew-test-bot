@@ -624,6 +624,7 @@ module Homebrew
       bottle_args << "--keep-old" if ARGV.include?("--keep-old") && !new_formula
       bottle_args << "--skip-relocation" if ARGV.include? "--skip-relocation"
       bottle_args << "--force-core-tap" if @test_default_formula
+      bottle_args << "--root-url=#{ENV["HOMEBREW_BOTTLE_DOMAIN"]}/#{Utils::Bottles::Bintray.repository(formula.tap)}" if ENV["HOMEBREW_BOTTLE_DOMAIN"]
       test "brew", "bottle", *bottle_args
       bottle_step = steps.last
       return unless bottle_step.passed?
