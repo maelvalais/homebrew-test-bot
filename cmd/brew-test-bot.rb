@@ -1245,14 +1245,17 @@ module Homebrew
 
     bottles_hash.each do |formula_name, bottle_hash|
       version = bottle_hash["formula"]["pkg_version"]
-      root_url = bottle_hash["bottle"]["root_url"]
       bintray_package = bottle_hash["bintray"]["package"]
       bintray_repo = bottle_hash["bintray"]["repository"]
       bintray_packages_url = "https://api.bintray.com/packages/#{bintray_org}/#{bintray_repo}"
 
       bottle_hash["bottle"]["tags"].each do |_tag, tag_hash|
         filename = tag_hash["filename"]
-        bintray_filename_url = "#{root_url}/#{filename}"
+        bintray_filename_url = if !bottle_hash["bottle"]["root_url"].nil?
+          "#{bottle_hash["bottle"]["root_url"]}/#{filename}"
+        else
+          "#{BottleSpecification::DEFAULT_DOMAIN}/#{bintray_repo}/#{filename}"
+        end
         filename_already_published = if ARGV.include?("--dry-run")
           puts "curl -I --output /dev/null #{bintray_filename_url}"
           false
