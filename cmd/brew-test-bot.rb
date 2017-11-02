@@ -1148,7 +1148,7 @@ module Homebrew
     ARGV << "--verbose"
 
     bottles = Dir["*.bottle*.*"]
-    if bottles.empty?
+    if ENV["JENKINS_HOME"] && bottles.empty?
       jenkins = ENV["JENKINS_HOME"]
       job = ENV["UPSTREAM_JOB_NAME"]
       id = ENV["UPSTREAM_BUILD_ID"]
@@ -1160,6 +1160,8 @@ module Homebrew
       raise "No bottles found!" if bottles.empty? && !ARGV.include?("--dry-run")
 
       FileUtils.cp bottles, Dir.pwd, verbose: true
+    elsif bottles.empty?
+      raise "no bottles in . found for uploading; --ci-upload cannot continue."
     end
 
     json_files = Dir.glob("*.bottle.json")
