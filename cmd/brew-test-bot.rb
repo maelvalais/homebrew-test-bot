@@ -546,6 +546,8 @@ module Homebrew
       end
 
       @formulae += @added_formulae + @modified_formulae
+      puts Formatter.headline("WARNING: no formula has been updated.\n"\
+           "Range considered: #{diff_start_sha1}..#{diff_end_sha1}") if @formulae.empty?
     end
 
     def skip(formula_name)
