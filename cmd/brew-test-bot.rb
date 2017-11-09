@@ -72,6 +72,16 @@
 #:    If `--git-email=<git-email>` is passed, set the Git
 #:    author/committer email to the given email.
 #:
+#:    `test-bot` works in two steps:
+#:
+#:      (1) build-and-test step where it produces the bottles using
+#:         `test-bot` with no argument or with `--ci-auto`, `--ci-testing` or
+#:         `--ci-pr` (unless you use `--no-bottle`).
+#:
+#:      (2) commit-and-upload step where it uses the bottles (tar.gz and json)
+#:         produced in (1) in order to create a single commit with all
+#:         bottle hashes and upload the `.tar.gz` to Bintray.
+#:
 #:    If `--ci-master` is passed, use the Homebrew master branch CI
 #:    options. Implies `--cleanup`: use with care!
 #:
