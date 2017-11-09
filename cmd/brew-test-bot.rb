@@ -84,8 +84,9 @@
 #:    If `--ci-auto` is passed, automatically pick one of the Homebrew CI
 #:    options based on the environment. Implies `--cleanup`: use with care!
 #:
-#:    If `--ci-upload` is passed, use the Homebrew CI bottle upload
-#:    options.
+#:    If `--ci-upload` is passed, use the Homebrew CI bottle upload.
+#:    If you want to push using https + OAuth2 Github token instead of ssh,
+#:    you can set `GITHUB_TOKEN`. By default, ssh + public key will be used.
 #:
 #
 #:    Influential environment variables include:
@@ -1138,6 +1139,9 @@ module Homebrew
       ENV["HOMEBREW_FORCE_HOMEBREW_ORG"] = "1"
     end
 
+    # If you want to use https+oauth2 github token instead of ssh public key
+    github_token = ENV["GITHUB_TOKEN"]
+
     # Don't pass keys/cookies to subprocesses
     ENV.clear_sensitive_environment!
 
@@ -1204,9 +1208,10 @@ module Homebrew
       safe_system "brew", "update"
     end
 
-    # These variables are for Jenkins, Jenkins pipeline and
-    # Circle CI respectively.
-    pr = ENV["UPSTREAM_PULL_REQUEST"] || ENV["CHANGE_ID"] || ENV["CIRCLE_PR_NUMBER"]
+    # These variables are for Jenkins, Jenkins pipeline,
+    # Circle CI and Travis CI respectively.
+    pr = ENV["UPSTREAM_PULL_REQUEST"] || ENV["CHANGE_ID"] || ENV["CIRCLE_PR_NUMBER"] \
+        || (ENV["TRAVIS_PULL_REQUEST"] if ENV["TRAVIS_PULL_REQUEST"] != "false")
     if pr
       pull_pr = "https://github.com/#{tap.user}/homebrew-#{tap.repo}/pull/#{pr}"
       safe_system "brew", "pull", "--clean", pull_pr
@@ -1220,9 +1225,13 @@ module Homebrew
       puts "brew bottle --merge --write $JSON_FILES"
     end
 
-    # These variables are for Jenkins and Circle CI respectively.
-    upstream_number = ENV["UPSTREAM_BUILD_NUMBER"] || ENV["CIRCLE_BUILD_NUM"]
-    remote = "git@github.com:#{ENV["GIT_AUTHOR_NAME"]}/homebrew-#{tap.repo}.git"
+    # These variables are for Jenkins, Circle CI, and Travis CI respectively.
+    upstream_number = ENV["UPSTREAM_BUILD_NUMBER"] || ENV["CIRCLE_BUILD_NUM"] || ENV["TRAVIS_BUILD_NUMBER"]
+    remote = if github_token
+      "https://#{github_token}@github.com/#{tap.user}/homebrew-#{tap.repo}.git"
+    else
+      "git@github.com:#{tap.user}/homebrew-#{tap.repo}.git"
+    end
     git_tag = if pr
       "pr-#{pr}"
     elsif upstream_number
