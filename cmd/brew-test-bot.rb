@@ -72,6 +72,16 @@
 #:    If `--git-email=<git-email>` is passed, set the Git
 #:    author/committer email to the given email.
 #:
+#:    `test-bot` works in two steps:
+#:
+#:      (1) build-and-test step where it produces the bottles using
+#:         `test-bot` with no argument or with `--ci-auto`, `--ci-testing` or
+#:         `--ci-pr` (unless you use `--no-bottle`).
+#:
+#:      (2) commit-and-upload step where it uses the bottles (tar.gz and json)
+#:         produced in (1) in order to create a single commit with all
+#:         bottle hashes and upload the `.tar.gz` to Bintray.
+#:
 #:    If `--ci-master` is passed, use the Homebrew master branch CI
 #:    options. Implies `--cleanup`: use with care!
 #:
@@ -84,8 +94,9 @@
 #:    If `--ci-auto` is passed, automatically pick one of the Homebrew CI
 #:    options based on the environment. Implies `--cleanup`: use with care!
 #:
-#:    If `--ci-upload` is passed, use the Homebrew CI bottle upload
-#:    options.
+#:    If `--ci-upload` is passed, use the Homebrew CI bottle upload.
+#:    If you want to push using https + OAuth2 Github token instead of ssh,
+#:    you can set `GITHUB_TOKEN`. By default, ssh + public key will be used.
 #:
 #
 #:    Influential environment variables include:
@@ -545,6 +556,8 @@ module Homebrew
       end
 
       @formulae += @added_formulae + @modified_formulae
+      puts Formatter.headline("WARNING: no formula has been updated.\n"\
+           "Range considered: #{diff_start_sha1}..#{diff_end_sha1}") if @formulae.empty?
     end
 
     def skip(formula_name)
@@ -1138,13 +1151,16 @@ module Homebrew
       ENV["HOMEBREW_FORCE_HOMEBREW_ORG"] = "1"
     end
 
+    # If you want to use https+oauth2 github token instead of ssh public key
+    github_token = ENV["GITHUB_TOKEN"]
+
     # Don't pass keys/cookies to subprocesses
     ENV.clear_sensitive_environment!
 
     ARGV << "--verbose"
 
     bottles = Dir["*.bottle*.*"]
-    if bottles.empty?
+    if ENV["JENKINS_HOME"] && bottles.empty?
       jenkins = ENV["JENKINS_HOME"]
       job = ENV["UPSTREAM_JOB_NAME"]
       id = ENV["UPSTREAM_BUILD_ID"]
@@ -1156,6 +1172,8 @@ module Homebrew
       raise "No bottles found!" if bottles.empty? && !ARGV.include?("--dry-run")
 
       FileUtils.cp bottles, Dir.pwd, verbose: true
+    elsif bottles.empty?
+      raise "no bottles in . found for uploading; --ci-upload cannot continue."
     end
 
     json_files = Dir.glob("*.bottle.json")
@@ -1204,9 +1222,10 @@ module Homebrew
       safe_system "brew", "update"
     end
 
-    # These variables are for Jenkins, Jenkins pipeline and
-    # Circle CI respectively.
-    pr = ENV["UPSTREAM_PULL_REQUEST"] || ENV["CHANGE_ID"] || ENV["CIRCLE_PR_NUMBER"]
+    # These variables are for Jenkins, Jenkins pipeline,
+    # Circle CI and Travis CI respectively.
+    pr = ENV["UPSTREAM_PULL_REQUEST"] || ENV["CHANGE_ID"] || ENV["CIRCLE_PR_NUMBER"] \
+        || (ENV["TRAVIS_PULL_REQUEST"] if ENV["TRAVIS_PULL_REQUEST"] != "false")
     if pr
       pull_pr = "https://github.com/#{tap.user}/homebrew-#{tap.repo}/pull/#{pr}"
       safe_system "brew", "pull", "--clean", pull_pr
@@ -1220,9 +1239,13 @@ module Homebrew
       puts "brew bottle --merge --write $JSON_FILES"
     end
 
-    # These variables are for Jenkins and Circle CI respectively.
-    upstream_number = ENV["UPSTREAM_BUILD_NUMBER"] || ENV["CIRCLE_BUILD_NUM"]
-    remote = "git@github.com:#{ENV["GIT_AUTHOR_NAME"]}/homebrew-#{tap.repo}.git"
+    # These variables are for Jenkins, Circle CI, and Travis CI respectively.
+    upstream_number = ENV["UPSTREAM_BUILD_NUMBER"] || ENV["CIRCLE_BUILD_NUM"] || ENV["TRAVIS_BUILD_NUMBER"]
+    remote = if github_token
+      "https://#{github_token}@github.com/#{tap.user}/homebrew-#{tap.repo}.git"
+    else
+      "git@github.com:#{tap.user}/homebrew-#{tap.repo}.git"
+    end
     git_tag = if pr
       "pr-#{pr}"
     elsif upstream_number
