@@ -435,7 +435,7 @@ module Homebrew
         diff_start_sha1 = ENV["GIT_PREVIOUS_COMMIT"]
         diff_end_sha1 = ENV["GIT_COMMIT"]
       # Use Travis CI Git variables for master or branch jobs.
-      elsif ENV["TRAVIS_COMMIT_RANGE"]
+      elsif ENV["TRAVIS_COMMIT_RANGE"] && !ENV["TRAVIS_COMMIT_RANGE"].empty?
         diff_start_sha1, diff_end_sha1 = ENV["TRAVIS_COMMIT_RANGE"].split "..."
       # Use Jenkins Pipeline plugin variables for branch jobs
       elsif ENV["JENKINS_HOME"] && !ENV["CHANGE_URL"] && ENV["CHANGE_TARGET"]
@@ -448,9 +448,17 @@ module Homebrew
         diff_end_sha1 = diff_start_sha1 = current_sha1
       end
 
+      # This command gives a lot of trouble when trying to set up Travis CI
+      # on taps. If it returns 'nil', tell the user something went wrong.
       diff_start_sha1 =
         Utils.popen_read("git", "-C", @repository, "merge-base",
                                 diff_start_sha1, diff_end_sha1).strip
+      if diff_start_sha1.nil?
+        raise "Failure when trying to get the merge-base using the command"\
+              "    git -C #{@repository} merge-base #{diff_start_sha1} #{diff_end_sha1}"\
+              "Check that #{@repository} is correctly synchronized with #{ENV["PWD"]},"\
+              "for example using a symlink."
+      end
 
       # Handle no arguments being passed on the command-line
       # e.g. `brew test-bot`
