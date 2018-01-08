@@ -58,6 +58,10 @@
 #:
 #:    If `--no-pull` is passed, don't use `brew pull` when possible.
 #:
+#:
+#:    If `--no-push` is passed, don't push the bottle DSL commit and the tag
+#:    upstream. The commit will be created anyway.
+#:
 #:    If `--coverage` is passed, generate and uplaod a coverage report.
 #:
 #:    If `--test-default-formula` is passed, use a default testing formula
@@ -450,14 +454,16 @@ module Homebrew
 
       # This command gives a lot of trouble when trying to set up Travis CI
       # on taps. If it returns 'nil', tell the user something went wrong.
+      diff_start_sha1_old = diff_start_sha1
       diff_start_sha1 =
         Utils.popen_read("git", "-C", @repository, "merge-base",
-                                diff_start_sha1, diff_end_sha1).strip
-      if diff_start_sha1.nil?
-        raise "Failure when trying to get the merge-base using the command"\
-              "    git -C #{@repository} merge-base #{diff_start_sha1} #{diff_end_sha1}"\
-              "Check that #{@repository} is correctly synchronized with #{ENV["PWD"]},"\
-              "for example using a symlink."
+                                diff_start_sha1, diff_end_sha1, err: :err).strip
+      if diff_start_sha1.nil? || diff_start_sha1.empty?
+        puts Formatter.headline
+          "WARNING: when looking for the 'merge base', the following command failed:\n"\
+          "    git -C #{@repository} merge-base '#{diff_start_sha1_old}' '#{diff_end_sha1}'\n"\
+          "1) this warning will always happen on force-push. Force pushes cannot be handled and are skipped by test-bot.\n"\
+          "2) also, make sure that the directory #{@repository} is correctly symlinked towards the directory #{ENV["PWD"]}."
       end
 
       # Handle no arguments being passed on the command-line
@@ -564,8 +570,14 @@ module Homebrew
       end
 
       @formulae += @added_formulae + @modified_formulae
-      puts Formatter.headline("WARNING: no formula has been updated.\n"\
-           "Range considered: #{diff_start_sha1}..#{diff_end_sha1}") if @formulae.empty?
+      if @formulae.empty? then
+        puts Formatter.headline("WARNING: no formula has been updated.\n"\
+        "If you expected a formula to be built, check that:\n"\
+        "1) the commit 'before' the series of pushed commits has a change one of\n"\
+        "   the formulas, i.e., it is not a change in .travis.yml or another file.\n"\
+        "2) the formula must be changed in the series of pushed commits.\n"\
+        "(range considered: #{diff_start_sha1}..#{diff_end_sha1})")
+      end
     end
 
     def skip(formula_name)
@@ -1264,7 +1276,7 @@ module Homebrew
       "$GIT_TAG"
     end
 
-    if git_tag
+    if git_tag && !(ARGV.include?("--no-push"))
       if ARGV.include?("--dry-run")
         puts "git push --force #{remote} master:master :refs/tags/#{git_tag}"
       else
@@ -1357,6 +1369,7 @@ module Homebrew
     end
 
     return unless git_tag
+    return if ARGV.include?("--no-push")
 
     if ARGV.include?("--dry-run")
       puts "git tag --force #{git_tag}"
