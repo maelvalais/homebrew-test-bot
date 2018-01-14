@@ -70,6 +70,10 @@
 #:    If `--bintray-org=<bintray-org>` is passed, upload to the given Bintray
 #:    organisation.
 #:
+#:    If `--override-bintray` is passed, already uploaded bottles will be
+#:    overriden. By default, `test-bot --ci-upload` will fail if the bottle
+#:    has already been uploaded.
+#:
 #:    If `--git-name=<git-name>` is passed, set the Git
 #:    author/committer names to the given name.
 #:
@@ -1376,6 +1380,7 @@ module Homebrew
                  --header X-Bintray-Package:#{bintray_package}
                  --header X-Bintray-Version:#{version}
                  --header X-Bintray-Publish:1
+                 --header X-Bintray-Override:#{ARGV.include?("--override-bintray") ? 1 : 0}
                  --upload-file #{filename}
                  #{content_url}
           EOS
@@ -1384,6 +1389,7 @@ module Homebrew
                "--header", "X-Bintray-Package:#{bintray_package}",
                "--header", "X-Bintray-Version:#{version}",
                "--header", "X-Bintray-Publish:1",
+               "--header", "X-Bintray-Override:#{ARGV.include?("--override-bintray") ? 1 : 0}",
                "--upload-file", filename, content_url
           puts
         end
