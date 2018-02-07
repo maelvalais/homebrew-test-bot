@@ -70,8 +70,9 @@
 #:    If `--bintray-org=<bintray-org>` is passed, upload to the given Bintray
 #:    organisation.
 #:
-#:    If `--git-name=<git-name>` is passed, set the Git
-#:    author/committer names to the given name.
+#:    If `--git-name=<git-name>` is passed, set the Git author/committer names
+#:    to the given name. It is also used when pushing the bottle DSL commit
+#:    and tag: the push goes to `github.com:<git-name>/homebrew-<tap-name>`.
 #:
 #:    If `--git-email=<git-email>` is passed, set the Git
 #:    author/committer email to the given email.
