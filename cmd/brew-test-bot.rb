@@ -81,14 +81,16 @@
 #:
 #:      (1) build-and-test step where it produces the bottles using
 #:         `test-bot` with no argument or with `--ci-auto`, `--ci-testing` or
-#:         `--ci-pr` (unless you use `--no-bottle`).
+#:         `--ci-pr` (unless you use `--no-bottle`). `--ci-master` will not
+#:         produce any bottle.
 #:
 #:      (2) commit-and-upload step where it uses the bottles (tar.gz and json)
 #:         produced in (1) in order to create a single commit with all
 #:         bottle hashes and upload the `.tar.gz` to Bintray.
 #:
 #:    If `--ci-master` is passed, use the Homebrew master branch CI
-#:    options. Implies `--cleanup`: use with care!
+#:    options. Implies `--cleanup`: use with care! `--ci-master` will skip
+#:    the bottle creation step.
 #:
 #:    If `--ci-pr` is passed, use the Homebrew pull request CI options.
 #:    Implies `--cleanup`: use with care!
