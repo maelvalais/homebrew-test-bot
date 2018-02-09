@@ -1181,7 +1181,7 @@ module Homebrew
 
       FileUtils.cp bottles, Dir.pwd, verbose: true
     elsif bottles.empty?
-      raise "no bottles in . found for uploading; --ci-upload cannot continue."
+      raise "No bottles found for uploading; --ci-upload cannot continue."
     end
 
     json_files = Dir.glob("*.bottle.json")
@@ -1250,9 +1250,9 @@ module Homebrew
     # These variables are for Jenkins, Circle CI, and Travis CI respectively.
     upstream_number = ENV["UPSTREAM_BUILD_NUMBER"] || ENV["CIRCLE_BUILD_NUM"] || ENV["TRAVIS_BUILD_NUMBER"]
     remote = if github_token
-      "https://#{github_token}@github.com/#{tap.user}/homebrew-#{tap.repo}.git"
+      "https://#{github_token}@github.com/#{ENV["GIT_AUTHOR_NAME"]}/homebrew-#{tap.repo}.git"
     else
-      "git@github.com:#{tap.user}/homebrew-#{tap.repo}.git"
+      "git@github.com:#{ENV["GIT_AUTHOR_NAME"]}/homebrew-#{tap.repo}.git"
     end
     git_tag = if pr
       "pr-#{pr}"
