@@ -74,6 +74,12 @@
 #:    overriden. By default, `test-bot --ci-upload` will fail if the bottle
 #:    has already been uploaded.
 #:
+#:    If `--bintray-immediate-publish` is passed, `test-bot --ci-upload` will
+#:    upload the bottles and mark them as "published" immediately. In the usual
+#:    Homebrew/core workflow, the CI first uploads the bottle unpublished; a
+#:    maintainer then runs `brew pull --bottle` in order to mark it as
+#:    published.
+#:
 #:    If `--git-name=<git-name>` is passed, set the Git
 #:    author/committer names to the given name.
 #:
@@ -1379,7 +1385,7 @@ module Homebrew
             curl --user $HOMEBREW_BINTRAY_USER:$HOMEBREW_BINTRAY_KEY
                  --header X-Bintray-Package:#{bintray_package}
                  --header X-Bintray-Version:#{version}
-                 --header X-Bintray-Publish:1
+                 --header X-Bintray-Publish:#{ARGV.include?("--bintray-immediate-publish") ? 1 : 0}
                  --header X-Bintray-Override:#{ARGV.include?("--override-bintray") ? 1 : 0}
                  --upload-file #{filename}
                  #{content_url}
@@ -1388,7 +1394,7 @@ module Homebrew
           curl "--user", "#{bintray_user}:#{bintray_key}",
                "--header", "X-Bintray-Package:#{bintray_package}",
                "--header", "X-Bintray-Version:#{version}",
-               "--header", "X-Bintray-Publish:1",
+               "--header", "X-Bintray-Publish:#{ARGV.include?("--bintray-immediate-publish") ? 1 : 0}",
                "--header", "X-Bintray-Override:#{ARGV.include?("--override-bintray") ? 1 : 0}",
                "--upload-file", filename, content_url
           puts
