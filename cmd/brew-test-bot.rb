@@ -1427,10 +1427,9 @@ module Homebrew
 
     if git_tag
       if ARGV.include?("--dry-run")
-        puts "git push --force #{remote} master:master :refs/tags/#{git_tag}"
+        puts "git push --force #{remote} :refs/tags/#{git_tag}"
       else
-        safe_system "git", "push", "--force", remote,
-                                   "master:master", ":refs/tags/#{git_tag}"
+        safe_system "git", "push", "--force", remote, ":refs/tags/#{git_tag}"
       end
     end
 
@@ -1524,11 +1523,10 @@ module Homebrew
 
     if ARGV.include?("--dry-run")
       puts "git tag --force #{git_tag}"
-      puts "git push --force #{remote} master:master refs/tags/#{git_tag}"
+      puts "git push --force #{remote} refs/tags/#{git_tag}"
     else
       safe_system "git", "tag", "--force", git_tag
-      safe_system "git", "push", "--force", remote, "master:master",
-                                                    "refs/tags/#{git_tag}"
+      safe_system "git", "push", "--force", remote, "refs/tags/#{git_tag}"
     end
   end
 
