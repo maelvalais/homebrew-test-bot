@@ -368,7 +368,8 @@ module Homebrew
                              "--verify", "-q", argument)
         @hash = argument
       elsif url_match = argument.match(HOMEBREW_PULL_OR_COMMIT_URL_REGEX)
-        @url = url_match[0]
+        @url, _, _, pr = *url_match
+        @pr_url = @url if pr
       elsif canonical_formula_name = safe_formula_canonical_name(argument)
         @formulae = [canonical_formula_name]
       else
@@ -863,7 +864,10 @@ module Homebrew
       fetch_args << "--force" if ARGV.include? "--cleanup"
       new_formula = @added_formulae.include?(formula_name)
       audit_args = [formula_name, "--online"]
-      audit_args << "--new-formula" if new_formula
+      if new_formula
+        audit_args << "--new-formula"
+        ENV["HOMEBREW_NEW_FORMULA_PULL_REQUEST_URL"] = @pr_url
+      end
 
       if formula.stable
         unless satisfied_requirements?(formula, :stable)
@@ -1090,7 +1094,7 @@ module Homebrew
       Tap.names.each do |tap|
         next if tap == "homebrew/core"
         next if tap.end_with?("/test-bot")
-        next if tap == "caskroom/cask"
+        next if tap == "homebrew/cask"
         next if tap == @tap.to_s
         test "brew", "untap", tap
       end
@@ -1177,7 +1181,7 @@ module Homebrew
 
       if ARGV.include?("--cleanup")
         clear_stash_if_needed(@repository)
-        reset_if_needed(@repository)
+        reset_if_needed(@repository) unless ENV["TRAVIS"]
 
         test "brew", "cleanup", "--prune=7"
 
@@ -1536,10 +1540,9 @@ module Homebrew
     end
 
     ENV["HOMEBREW_DEVELOPER"] = "1"
-    ENV["HOMEBREW_SANDBOX"] = "1"
-    ENV["HOMEBREW_ENV_FILTERING"] = "1"
     ENV["HOMEBREW_NO_AUTO_UPDATE"] = "1"
     ENV["HOMEBREW_NO_EMOJI"] = "1"
+    ENV["HOMEBREW_LINKAGE_CACHE"] = "1"
     ENV["HOMEBREW_FAIL_LOG_LINES"] = "150"
     ENV["PATH"] =
       "#{HOMEBREW_PREFIX}/bin:#{HOMEBREW_PREFIX}/sbin:#{ENV["PATH"]}"
