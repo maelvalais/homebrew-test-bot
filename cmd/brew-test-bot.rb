@@ -4,9 +4,6 @@
 #:    If `--dry-run` is passed, print what would be done rather than doing
 #:    it.
 #:
-#:    If `--local` is passed, perform only local operations (i.e. don't
-#:    push or create PR).
-#:
 #:    If `--keep-logs` is passed, write and keep log files under
 #:    `./brewbot/`.
 #:
@@ -866,7 +863,10 @@ module Homebrew
       audit_args = [formula_name, "--online"]
       if new_formula
         audit_args << "--new-formula"
-        ENV["HOMEBREW_NEW_FORMULA_PULL_REQUEST_URL"] = @pr_url
+        if url_match = @url.to_s.match(HOMEBREW_PULL_OR_COMMIT_URL_REGEX)
+          _, _, _, pr = *url_match
+          ENV["HOMEBREW_NEW_FORMULA_PULL_REQUEST_URL"] = @url if pr
+        end
       end
 
       if formula.stable
@@ -1344,6 +1344,7 @@ module Homebrew
             "pkg_version" => "1.0.0",
           },
           "bottle" => {
+            "rebuild" => 0,
             "tags" => {
               Utils::Bottles.tag => {
                 "filename" =>
@@ -1367,7 +1368,7 @@ module Homebrew
     tap ||= Tap.fetch(tap_name)
     ENV["HOMEBREW_GIT_NAME"] = ARGV.value("git-name") || "BrewTestBot"
     ENV["HOMEBREW_GIT_EMAIL"] = ARGV.value("git-email") ||
-                                "brew-test-bot@googlegroups.com"
+                                "homebrew-test-bot@lists.sfconservancy.org"
 
     if ARGV.include?("--dry-run")
       puts <<~EOS
@@ -1441,28 +1442,30 @@ module Homebrew
 
     bottles_hash.each do |formula_name, bottle_hash|
       version = bottle_hash["formula"]["pkg_version"]
-      root_url = bottle_hash["bottle"]["root_url"]
       bintray_package = bottle_hash["bintray"]["package"]
       bintray_repo = bottle_hash["bintray"]["repository"]
       bintray_packages_url =
         "https://api.bintray.com/packages/#{bintray_org}/#{bintray_repo}"
 
-      bottle_hash["bottle"]["tags"].each_value do |tag_hash|
-        filename = tag_hash["filename"]
-        bintray_filename_url = "#{root_url}/#{filename}"
+      rebuild = bottle_hash["bottle"]["rebuild"]
+
+      bottle_hash["bottle"]["tags"].each do |tag, tag_hash|
+        filename = Bottle::Filename.new(formula_name, version, tag, rebuild)
+        bintray_url =
+          "#{HOMEBREW_BOTTLE_DOMAIN}/#{bintray_repo}/#{filename.bintray}"
         filename_already_published = if ARGV.include?("--dry-run")
-          puts "curl -I --output /dev/null #{bintray_filename_url}"
+          puts "curl -I --output /dev/null #{bintray_url}"
           false
         else
           begin
-            system(*curl_args("-I", "--output", "/dev/null",
-                              bintray_filename_url))
+            system(curl_executable, *curl_args("-I", "--output", "/dev/null",
+                   bintray_url))
           end
         end
 
         if filename_already_published
           raise <<~EOS
-            #{filename} is already published. Please remove it manually from
+            #{filename.bintray} is already published. Please remove it manually from
             https://bintray.com/#{bintray_org}/#{bintray_repo}/#{bintray_package}/view#files
           EOS
         end
@@ -1473,7 +1476,7 @@ module Homebrew
             puts "curl --output /dev/null #{package_url}"
             false
           else
-            system(*curl_args("--output", "/dev/null", package_url))
+            system(curl_executable, *curl_args("--output", "/dev/null", package_url))
           end
 
           unless package_exists
@@ -1542,7 +1545,6 @@ module Homebrew
     ENV["HOMEBREW_DEVELOPER"] = "1"
     ENV["HOMEBREW_NO_AUTO_UPDATE"] = "1"
     ENV["HOMEBREW_NO_EMOJI"] = "1"
-    ENV["HOMEBREW_LINKAGE_CACHE"] = "1"
     ENV["HOMEBREW_FAIL_LOG_LINES"] = "150"
     ENV["PATH"] =
       "#{HOMEBREW_PREFIX}/bin:#{HOMEBREW_PREFIX}/sbin:#{ENV["PATH"]}"
@@ -1550,6 +1552,7 @@ module Homebrew
     travis = !ENV["TRAVIS"].nil?
     if travis
       ARGV << "--verbose" << "--no-pull"
+      ENV["HOMEBREW_COLOR"] = "1"
       ENV["HOMEBREW_VERBOSE_USING_DOTS"] = "1"
     end
 
@@ -1564,7 +1567,7 @@ module Homebrew
 
     # Only report coverage if build runs on macOS and this is indeed Homebrew,
     # as we don't want this to be averaged with inferior Linux test coverage.
-    if OS.mac? && MacOS.version == :sierra && (ENV["CODECOV_TOKEN"] || travis)
+    if OS.mac? && MacOS.version == :high_sierra && (ENV["CODECOV_TOKEN"] || travis)
       ARGV << "--coverage"
     end
 
