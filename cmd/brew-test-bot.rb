@@ -63,8 +63,22 @@
 #:    If `--bintray-org=<bintray-org>` is passed, upload to the given Bintray
 #:    organisation.
 #:
-#:    If `--root-url` is passed, use the specified <URL> as the root of the
-#:    bottle's URL instead of Homebrew's default.
+#:    If `--root-url=<URL>` is passed, use the specified URL as the root of the
+#:    bottle's URL instead of Homebrew's default. This flag is similar to
+#:    the effect of HOMEBREW_BOTTLE_DOMAIN, except
+#:    - HOMEBREW_BOTTLE_DOMAIN applies to all formulas including the ones
+#:      tested by test-bot. The flag --root-url only applies to the tested
+#:      ones.
+#:    - HOMEBREW_BOTTLE_DOMAIN has the form https://homebrew.bintray.org
+#:      but --root-url expects the form https://homebrew.bintray.org/bottles-core
+#:
+#:    If `--bintray-domain=<URL>` is passed, use it as a URL base for bintray
+#:    downloads. By default, it is https://homebrew.bintray.org or
+#:    linuxbrew.bintray.org for Linuxbrew. For a tap, the URL is of the form
+#:    https://dl.bintray.org/username.
+#:    NOTE: The --root-url is similar except --root-url needs the ending
+#:    'bottles-<tap-name>'; with --bintray-domain, the 'bottles-*' part is
+#:    automatically added.
 #:
 #:    If `--git-name=<git-name>` is passed, set the Git
 #:    author/committer names to the given name.
@@ -360,6 +374,7 @@ module Homebrew
       @skip_homebrew = options.fetch(:skip_homebrew, false)
       @skip_cleanup_before = options.fetch(:skip_cleanup_before, false)
       @skip_cleanup_after = options.fetch(:skip_cleanup_after, false)
+      @bintray_domain = options.fetch(:bintray_domain, HOMEBREW_BOTTLE_DOMAIN)
 
       if quiet_system("git", "-C", @repository, "rev-parse",
                              "--verify", "-q", argument)
@@ -769,12 +784,11 @@ module Homebrew
       return if ARGV.include?("--no-bottle")
       return if formula.bottle_disabled?
 
-      root_url = ARGV.value("root-url")
       bottle_args = ["--verbose", "--json", formula.name]
       bottle_args << "--keep-old" if ARGV.include?("--keep-old") && !new_formula
       bottle_args << "--skip-relocation" if ARGV.include? "--skip-relocation"
       bottle_args << "--force-core-tap" if @test_default_formula
-      bottle_args << "--root-url=#{root_url}" if root_url
+      bottle_args << "--root-url=#{@bintray_domain}/#{Utils::Bottles::Bintray.repository(formula.tap)}"
       bottle_args << "--or-later" if ARGV.include?("--or-later")
       test "brew", "bottle", *bottle_args
 
@@ -1287,7 +1301,7 @@ module Homebrew
     end
   end
 
-  def test_ci_upload(tap)
+  def test_ci_upload(tap, bintray_bottle_domain)
     # Don't trust formulae we're uploading
     ENV["HOMEBREW_DISABLE_LOAD_FORMULA"] = "1"
 
@@ -1452,7 +1466,7 @@ module Homebrew
       bottle_hash["bottle"]["tags"].each do |tag, tag_hash|
         filename = Bottle::Filename.new(formula_name, version, tag, rebuild)
         bintray_url =
-          "#{HOMEBREW_BOTTLE_DOMAIN}/#{bintray_repo}/#{filename.bintray}"
+          "#{bintray_bottle_domain}/#{bintray_repo}/#{filename.bintray}"
         filename_already_published = if ARGV.include?("--dry-run")
           puts "curl -I --output /dev/null #{bintray_url}"
           false
@@ -1625,7 +1639,15 @@ module Homebrew
       end
     end
 
-    return test_ci_upload(tap) if ARGV.include?("--ci-upload")
+    bintray_domain = if ARGV.value("bintray-domain")
+      ARGV.value("bintray-domain")
+    elsif ARGV.value("root-url")
+      ARGV.value("root-url").gsub(/\/bottles-.*/,"")
+    else
+      HOMEBREW_BOTTLE_DOMAIN
+    end
+
+    return test_ci_upload(tap, bintray_domain) if ARGV.include?("--ci-upload")
 
     tests = []
     any_errors = false
@@ -1635,6 +1657,7 @@ module Homebrew
     if ARGV.named.empty?
       # With no arguments just build the most recent commit.
       current_test = Test.new("HEAD", tap: tap,
+                                      bintray_domain: bintray_domain,
                                       skip_setup: skip_setup,
                                       skip_homebrew: skip_homebrew,
                                       skip_cleanup_before: skip_cleanup_before)
