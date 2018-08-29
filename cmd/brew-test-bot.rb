@@ -1505,21 +1505,16 @@ module Homebrew
         end
 
         content_url = "https://api.bintray.com/content/#{bintray_org}"
-        content_url += "/#{bintray_repo}/#{filename}"
+        content_url +=
+          "/#{bintray_repo}/#{bintray_package}/#{version}/#{filename.bintray}"
         if ARGV.include?("--dry-run")
           puts <<~EOS
             curl --user $HOMEBREW_BINTRAY_USER:$HOMEBREW_BINTRAY_KEY
-                 --header X-Bintray-Package:#{bintray_package}
-                 --header X-Bintray-Version:#{version}
-                 --header X-Bintray-Publish:1
                  --upload-file #{filename}
                  #{content_url}
           EOS
         else
           curl "--user", "#{bintray_user}:#{bintray_key}",
-               "--header", "X-Bintray-Package:#{bintray_package}",
-               "--header", "X-Bintray-Version:#{version}",
-               "--header", "X-Bintray-Publish:1",
                "--upload-file", filename, content_url
           puts
         end
