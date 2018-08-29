@@ -1469,7 +1469,8 @@ module Homebrew
             https://bintray.com/#{bintray_org}/#{bintray_repo}/#{bintray_package}/view#files
           EOS
         end
-
+        puts "curl_executable=#{curl_executable}"
+        puts "curl_executable is nil" if curl_executable.nil?
         unless formula_packaged[formula_name]
           package_url = "#{bintray_packages_url}/#{bintray_package}"
           package_exists = if ARGV.include?("--dry-run")
