@@ -139,18 +139,16 @@ module Homebrew
 
   HOMEBREW_TAP_REGEX = %r{^([\w-]+)/homebrew-([\w-]+)$}
 
-  WELL_STYLED_TAPS = [
-    "homebrew/core",
-    "homebrew/test-bot",
+  REQUIRED_TAPS = %w[
+    homebrew/core
+    homebrew/test-bot
   ].freeze
 
-  def fix_encoding!(str)
-    # Assume we are starting from a "mostly" UTF-8 string
-    str.force_encoding(Encoding::UTF_8)
-    return str if str.valid_encoding?
-    str.encode!(Encoding::UTF_16, invalid: :replace)
-    str.encode!(Encoding::UTF_8)
-  end
+  REQUIRED_TEST_BREW_TAPS = REQUIRED_TAPS + %w[
+    homebrew/cask
+    homebrew/bundle
+    homebrew/services
+  ].freeze
 
   def resolve_test_tap
     if (tap = ARGV.value("tap"))
@@ -174,7 +172,8 @@ module Homebrew
     git_url =
       ENV["UPSTREAM_GIT_URL"] ||
       ENV["GIT_URL"] ||
-      ENV["CIRCLE_REPOSITORY_URL"]
+      ENV["CIRCLE_REPOSITORY_URL"] ||
+      ENV["BUILD_REPOSITORY_URI"]
     return unless git_url
 
     url_path = git_url.sub(%r{^https?://github\.com/}, "")
@@ -197,16 +196,18 @@ module Homebrew
     # @param test [Test] The parent Test object
     # @param command [Array<String>] Command to execute and arguments
     # @param options [Hash] Recognized options are:
-    #   :puts_output_on_success
     #   :repository
-    def initialize(test, command, options = {})
+    #   :env
+    #   :puts_output_on_success
+    def initialize(test, command, repository:, env: {}, puts_output_on_success: false)
       @test = test
       @category = test.category
       @command = command
-      @puts_output_on_success = options[:puts_output_on_success]
+      @puts_output_on_success = puts_output_on_success
       @name = command[1].delete("-")
       @status = :running
-      @repository = options[:repository] || HOMEBREW_REPOSITORY
+      @repository = repository
+      @env = env
     end
 
     def log_file_path
@@ -255,19 +256,21 @@ module Homebrew
     end
 
     def puts_command
-      if ENV["TRAVIS"]
+      if ENV["HOMEBREW_TRAVIS_CI"]
         travis_fold_name = @command.first(2).join(".")
         travis_fold_name = "git.#{@command[3]}" if travis_fold_name == "git.-C"
         @travis_fold_id = "#{travis_fold_name}.#{Step.travis_increment}"
         @travis_timer_id = rand(2**32).to_s(16)
         puts "travis_fold:start:#{@travis_fold_id}"
         puts "travis_time:start:#{@travis_timer_id}"
+      else
+        puts
       end
       puts Formatter.headline(command_trimmed, color: :blue)
     end
 
     def puts_result
-      if ENV["TRAVIS"]
+      if ENV["HOMEBREW_TRAVIS_CI"]
         travis_start_time = @start_time.to_i * 1_000_000_000
         travis_end_time = @end_time.to_i * 1_000_000_000
         travis_duration = travis_end_time - travis_start_time
@@ -308,42 +311,31 @@ module Homebrew
         raise "git should always be called with -C!"
       end
 
+      executable, *args = @command
+
       verbose = ARGV.verbose?
-      # Step may produce arbitrary output and we read it bytewise, so must
-      # buffer it as binary and convert to UTF-8 once complete
-      output = "".encode!("BINARY")
-      read, write = IO.pipe
 
-      begin
-        pid = fork do
-          read.close
-          $stdout.reopen(write)
-          $stderr.reopen(write)
-          write.close
-          exec(*@command)
-        end
-        write.close
-        while buf = read.readpartial(4096)
-          if verbose
-            print buf
-            $stdout.flush
-          end
-          output << buf
-        end
-      rescue EOFError
-        # End of file is expected eventually
-        nil
-      ensure
-        read.close
-      end
+      result = system_command executable, args: args,
+                                          print_stdout: verbose,
+                                          print_stderr: verbose,
+                                          env: @env
 
-      Process.wait(pid)
       @end_time = Time.now
-      @status = $CHILD_STATUS.success? ? :passed : :failed
+      @status = result.success? ? :passed : :failed
       puts_result
 
+      output = result.merged_output
+
       unless output.empty?
-        @output = Homebrew.fix_encoding!(output)
+        output.force_encoding(Encoding::UTF_8)
+
+        @output = if output.valid_encoding?
+          output
+        else
+          output.encode!(Encoding::UTF_16, invalid: :replace)
+          output.encode!(Encoding::UTF_8)
+        end
+
         puts @output if (failed? || @puts_output_on_success) && !verbose
         File.write(log_file_path, @output) if ARGV.include? "--keep-logs"
       end
@@ -355,7 +347,7 @@ module Homebrew
   class Test
     attr_reader :log_root, :category, :name, :steps
 
-    def initialize(argument, options = {})
+    def initialize(argument, tap: nil, skip_setup: false, skip_homebrew: false, skip_cleanup_before: false, skip_cleanup_after: false, bintray_domain: HOMEBREW_BOTTLE_DOMAIN)
       @hash = nil
       @url = nil
       @formulae = []
@@ -363,18 +355,18 @@ module Homebrew
       @modified_formulae = []
       @deleted_formulae = []
       @steps = []
-      @tap = options[:tap]
+      @tap = tap
       @repository = if @tap
         @test_bot_tap = @tap.repo.to_s == "test-bot"
         @tap.path
       else
         HOMEBREW_REPOSITORY
       end
-      @skip_setup = options.fetch(:skip_setup, false)
-      @skip_homebrew = options.fetch(:skip_homebrew, false)
-      @skip_cleanup_before = options.fetch(:skip_cleanup_before, false)
-      @skip_cleanup_after = options.fetch(:skip_cleanup_after, false)
-      @bintray_domain = options.fetch(:bintray_domain, HOMEBREW_BOTTLE_DOMAIN)
+      @skip_setup = skip_setup
+      @skip_homebrew = skip_homebrew
+      @skip_cleanup_before = skip_cleanup_before
+      @skip_cleanup_after = skip_cleanup_after
+      @bintray_domain = bintray_domain
 
       if quiet_system("git", "-C", @repository, "rev-parse",
                              "--verify", "-q", argument)
@@ -438,7 +430,7 @@ module Homebrew
         @url = ENV["ghprbPullLink"] || ENV["CHANGE_URL"]
         @hash = nil
         test "git", "-C", @repository, "checkout", "origin/master"
-      # Use Jenkins Git plugin variables
+      # Use Jenkins Git plugin variables.
       elsif ENV["JENKINS_HOME"] && ENV["GIT_URL"] && ENV["GIT_BRANCH"]
         git_url = ENV["GIT_URL"].chomp("/").chomp(".git")
         %r{origin/pr/(\d+)/(merge|head)} =~ ENV["GIT_BRANCH"]
@@ -447,8 +439,12 @@ module Homebrew
           @hash = nil
         end
       # Use Circle CI pull-request variables for pull request jobs.
-      elsif ENV["CI_PULL_REQUEST"] && !ENV["CI_PULL_REQUEST"].empty?
+      elsif !ENV["CI_PULL_REQUEST"].to_s.empty?
         @url = ENV["CI_PULL_REQUEST"]
+        @hash = nil
+      # Use Azure Pipeline variables for pull request jobs.
+      elsif ENV["BUILD_REPOSITORY_URI"] && ENV["SYSTEM_PULLREQUEST_PULLREQUESTNUMBER"]
+        @url = "#{ENV["BUILD_REPOSITORY_URI"]}/pull/#{ENV["SYSTEM_PULLREQUEST_PULLREQUESTNUMBER"]}"
         @hash = nil
       end
 
@@ -459,11 +455,18 @@ module Homebrew
       # Use Travis CI Git variables for master or branch jobs.
       elsif ENV["TRAVIS_COMMIT_RANGE"] && !ENV["TRAVIS_COMMIT_RANGE"].empty?
         diff_start_sha1, diff_end_sha1 = ENV["TRAVIS_COMMIT_RANGE"].split "..."
-      # Use Jenkins Pipeline plugin variables for branch jobs
+      # Use Jenkins Pipeline plugin variables for branch jobs.
       elsif ENV["JENKINS_HOME"] && !ENV["CHANGE_URL"] && ENV["CHANGE_TARGET"]
         diff_start_sha1 =
           Utils.popen_read("git", "-C", @repository, "rev-parse",
                                   "--short", ENV["CHANGE_TARGET"]).strip
+        diff_end_sha1 = current_sha1
+      # Use Azure Pipeline variables for master or branch jobs.
+      elsif ENV["SYSTEM_PULLREQUEST_TARGETBRANCH"] && ENV["BUILD_SOURCEVERSION"]
+        diff_start_sha1 =
+          Utils.popen_read("git", "-C", @repository, "rev-parse",
+                                  "--short",
+                                  ENV["SYSTEM_PULLREQUEST_TARGETBRANCH"]).strip
         diff_end_sha1 = current_sha1
       # Otherwise just use the current SHA-1 (which may be overriden later)
       else
@@ -544,7 +547,7 @@ module Homebrew
       if @tap.to_s != "homebrew/core"
         core_path = CoreTap.instance.path
         if core_path.exist?
-          if ENV["TRAVIS"]
+          if ENV["HOMEBREW_TRAVIS_CI"]
             test "git", "-C", core_path.to_s, "fetch", "--depth=1", "origin"
             test "git", "-C", core_path.to_s, "reset", "--hard", "origin/master"
           end
@@ -604,6 +607,8 @@ module Homebrew
       @formulae += @added_formulae + @modified_formulae
       puts Formatter.headline("WARNING: no formula has been updated.\n"\
            "Range considered: #{diff_start_sha1}..#{diff_end_sha1}") if @formulae.empty?
+      @test_brew = (!@tap || @test_bot_tap) &&
+                   (@formulae.empty? || @test_default_formula)
     end
 
     def skip(formula_name)
@@ -630,6 +635,11 @@ module Homebrew
     def setup
       @category = __method__
       return if @skip_setup
+      # install newer Git when needed
+      if OS.mac? && MacOS.version < :sierra
+        test "brew", "install", "git"
+        ENV["HOMEBREW_FORCE_BREWED_GIT"] = "1"
+      end
       test "brew", "doctor"
       test "brew", "--env"
       test "brew", "config"
@@ -663,7 +673,8 @@ module Homebrew
         end
       rescue CompilerSelectionError => e
         unless installed_gcc
-          run_as_not_developer { test "brew", "install", "gcc" }
+          test "brew", "install", "gcc",
+               env: { "HOMEBREW_DEVELOPER" => nil }
           installed_gcc = true
           DevelopmentTools.clear_version_cache
           retry
@@ -676,7 +687,8 @@ module Homebrew
 
     def install_mercurial_if_needed(deps, reqs)
       if (deps | reqs).any? { |d| d.name == "mercurial" && d.build? }
-        run_as_not_developer { test "brew", "install", "mercurial" }
+        test "brew", "install", "mercurial",
+             env: { "HOMEBREW_DEVELOPER" => nil }
       end
     end
 
@@ -810,7 +822,17 @@ module Homebrew
       test "brew", "bottle", *bottle_merge_args
       test "brew", "uninstall", "--force", formula.name
 
-      FileUtils.ln bottle_filename, HOMEBREW_CACHE/bottle_filename, force: true
+      bottle_json = JSON.parse(File.read(bottle_json_filename))
+      root_url = bottle_json.dig(formula.full_name, "bottle", "root_url")
+      filename = bottle_json.dig(formula.full_name, "bottle", "tags").values.first["filename"]
+
+      download_strategy = CurlDownloadStrategy.new("#{root_url}/#{filename}", formula.name, formula.version)
+
+      FileUtils.ln bottle_filename, download_strategy.cached_location, force: true
+      FileUtils.ln_s download_strategy.cached_location.relative_path_from(download_strategy.symlink_location),
+                     download_strategy.symlink_location,
+                     force: true
+
       @formulae.delete(formula.name)
 
       unless @unchanged_build_dependencies.empty?
@@ -829,10 +851,10 @@ module Homebrew
         return if steps.last.failed?
         unlink_conflicts dependent
         unless ARGV.include?("--fast")
-          run_as_not_developer do
-            test "brew", "install", "--only-dependencies", dependent.name
-            test "brew", "install", dependent.name
-          end
+          test "brew", "install", "--only-dependencies", dependent.name,
+               env: { "HOMEBREW_DEVELOPER" => nil }
+          test "brew", "install", dependent.name,
+               env: { "HOMEBREW_DEVELOPER" => nil }
           return if steps.last.failed?
         end
       end
@@ -943,23 +965,20 @@ module Homebrew
 
       # Don't care about e.g. bottle failures for dependencies.
       install_passed = false
-      run_as_not_developer do
-        if !ARGV.include?("--fast") ||
-           formula_bottled ||
-           formula.bottle_unneeded?
-          test "brew", "install", "--only-dependencies", *install_args
-          test "brew", "install", *install_args
-          install_passed = steps.last.passed?
-        end
+      if !ARGV.include?("--fast") || formula_bottled || formula.bottle_unneeded?
+        test "brew", "install", "--only-dependencies", *install_args,
+             env: { "HOMEBREW_DEVELOPER" => nil }
+        test "brew", "install", *install_args,
+             env: { "HOMEBREW_DEVELOPER" => nil }
+
+        install_passed = steps.last.passed?
       end
 
       test "brew", "audit", *audit_args
 
       # Only check for style violations if not already shown by
       # `brew audit --new-formula`
-      if !new_formula && @tap && WELL_STYLED_TAPS.include?(@tap.name)
-        test "brew", "style", formula_name
-      end
+      test "brew", "style", formula_name unless new_formula
 
       test_args = ["--verbose"]
       test_args << "--keep-tmp" if ARGV.keep_tmp?
@@ -988,11 +1007,10 @@ module Homebrew
          satisfied_requirements?(formula, :devel)
         test "brew", "fetch", "--retry", "--devel", *fetch_args
 
-        run_as_not_developer do
-          test "brew", "install", "--devel", "--only-dependencies",
-                                  formula_name, *shared_install_args
-          test "brew", "install", "--devel", formula_name, *shared_install_args
-        end
+        test "brew", "install", "--devel", "--only-dependencies", formula_name, *shared_install_args,
+             env: { "HOMEBREW_DEVELOPER" => nil }
+        test "brew", "install", "--devel", formula_name, *shared_install_args,
+             env: { "HOMEBREW_DEVELOPER" => nil }
         devel_install_passed = steps.last.passed?
 
         if devel_install_passed
@@ -1015,25 +1033,17 @@ module Homebrew
 
     def deleted_formula(formula_name)
       @category = "#{__method__}.#{formula_name}"
-      test "brew", "uses", formula_name
-    end
-
-    def coverage_args
-      return [] unless ARGV.include?("--coverage")
-      ["--coverage"]
+      test "brew", "uses", "--include-build",
+                           "--include-optional",
+                           "--include-test",
+                           formula_name
     end
 
     def homebrew
       @category = __method__
       return if @skip_homebrew
 
-      test_brew = !@tap || @test_bot_tap
-      test_no_formulae = @formulae.empty? || @test_default_formula
-
-      if test_brew && test_no_formulae
-        # verify that manpages are up-to-date
-        test "brew", "man", "--fail-if-changed"
-
+      if @test_brew
         # test update from origin/master to current commit.
         test "brew", "update-test"
         # test update from origin/master to current tag.
@@ -1041,16 +1051,32 @@ module Homebrew
         # test no-op update from current commit (to current commit, a no-op).
         test "brew", "update-test", "--commit=HEAD"
 
-        test "brew", "readall", "--aliases"
+        installed_taps = Tap.select(&:installed?).map(&:name)
+        (REQUIRED_TEST_BREW_TAPS - installed_taps).each do |tap|
+          test "brew", "tap", tap
+        end
 
-        test "brew", "style"
+        test "brew", "tap", "homebrew/cask"
+        test "brew", "tap", "homebrew/bundle"
+
+        test "brew", "readall", "--aliases"
 
         if OS.linux?
           test "brew", "tests", "--no-compat", "--online"
           test "brew", "tests", "--generic", "--online"
         end
 
-        test "brew", "tests", "--online", *coverage_args
+        if ARGV.include?("--coverage")
+          test "brew", "tests", "--online", "--coverage"
+          FileUtils.cp_r "#{HOMEBREW_REPOSITORY}/Library/Homebrew/test/coverage",
+                         Dir.pwd
+        else
+          test "brew", "tests", "--online"
+        end
+
+        # these commands use gems installed by `brew tests`
+        test "brew", "man", "--fail-if-changed"
+        test "brew", "style"
       elsif @tap
         test "brew", "readall", "--aliases", @tap.name
       end
@@ -1063,8 +1089,12 @@ module Homebrew
     end
 
     def clean_if_needed(repository)
+      return if repository == HOMEBREW_PREFIX
+
       clean_args = [
         "-dx",
+        "--exclude=*.bottle*.*",
+        "--exclude=coverage",
         "--exclude=Library/Taps",
         "--exclude=Library/Homebrew/vendor",
         "--exclude=#{@brewbot_root.basename}",
@@ -1105,20 +1135,30 @@ module Homebrew
       clean_if_needed(@repository)
       prune_if_needed(@repository)
 
-      Tap.names.each do |tap|
-        next if tap == "homebrew/core"
-        next if tap.end_with?("/test-bot")
-        next if tap == "homebrew/cask"
-        next if tap == @tap.to_s
-        test "brew", "untap", tap
+      Tap.names.each do |tap_name|
+        next if tap_name == @tap&.name
+        if @test_brew && REQUIRED_TEST_BREW_TAPS.include?(tap_name)
+          next
+        elsif REQUIRED_TAPS.include?(tap_name)
+          next
+        end
+        test "brew", "untap", tap_name
       end
 
-      prefix_paths_to_keep = Keg::TOP_LEVEL_DIRECTORIES.dup
-      prefix_paths_to_keep << "bin/brew"
-      prefix_paths_to_keep.map! { |path| "#{HOMEBREW_PREFIX}/#{path}" }
-      Dir.glob("#{HOMEBREW_PREFIX}/**/*").each do |path|
-        next if path.start_with?(HOMEBREW_REPOSITORY.to_s)
-        next if prefix_paths_to_keep.include?(path)
+      Keg::MUST_BE_WRITABLE_DIRECTORIES.each(&:mkpath)
+      Pathname.glob("#{HOMEBREW_PREFIX}/**/*").each do |path|
+        next if Keg::MUST_BE_WRITABLE_DIRECTORIES.include?(path)
+        next if path == HOMEBREW_PREFIX/"bin/brew"
+        next if path == HOMEBREW_PREFIX/"var"
+        next if path == HOMEBREW_PREFIX/"var/homebrew"
+        path_string = path.to_s
+        next if path_string.start_with?(HOMEBREW_REPOSITORY.to_s)
+        next if path_string.start_with?(@brewbot_root.to_s)
+        next if path_string.start_with?(Dir.pwd.to_s)
+        # don't try to delete osxfuse files
+        next if path_string.match?(
+          "(include|lib)/(lib|osxfuse/|pkgconfig/)?(osx|mac)?fuse(.*\.(dylib|h|la|pc))?$",
+        )
         FileUtils.rm_rf path
       end
 
@@ -1135,6 +1175,8 @@ module Homebrew
         reset_if_needed(git_repo)
         prune_if_needed(git_repo)
       end
+
+      test "brew", "prune"
     end
 
     def clear_stash_if_needed(repository)
@@ -1161,6 +1203,11 @@ module Homebrew
 
       Pathname.glob("*.bottle*.*").each(&:unlink)
 
+      # Cleanup NodeJS headers on Azure Pipeline
+      if OS.linux? && ENV["TF_BUILD"]
+        test "sudo", "rm", "-rf", "/usr/local/include/node"
+      end
+
       cleanup_shared
     end
 
@@ -1180,7 +1227,7 @@ module Homebrew
       return if @skip_cleanup_after
       return if ENV["CIRCLE_CI"]
 
-      if ENV["TRAVIS"]
+      if ENV["HOMEBREW_TRAVIS_CI"]
         if OS.mac?
           # For Travis CI build caching.
           test "brew", "install", "md5deep", "libyaml", "gmp", "openssl@1.1"
@@ -1195,13 +1242,13 @@ module Homebrew
 
       if ARGV.include?("--cleanup")
         clear_stash_if_needed(@repository)
-        reset_if_needed(@repository) unless ENV["TRAVIS"]
+        reset_if_needed(@repository) unless ENV["HOMEBREW_TRAVIS_CI"]
 
         test "brew", "cleanup", "--prune=7"
 
         pkill_if_needed!
 
-        cleanup_shared unless ENV["TRAVIS"]
+        cleanup_shared unless ENV["HOMEBREW_TRAVIS_CI"]
 
         if ARGV.include? "--local"
           FileUtils.rm_rf ENV["HOMEBREW_HOME"]
@@ -1212,11 +1259,8 @@ module Homebrew
       FileUtils.rm_rf @brewbot_root unless ARGV.include? "--keep-logs"
     end
 
-    def test(*args)
-      options = args.last.is_a?(Hash) ? args.pop : {}
-      options[:repository] = @repository
-
-      step = Step.new self, args, options
+    def test(*args, **options)
+      step = Step.new(self, args, repository: @repository, **options)
       step.run
       steps << step
       step
@@ -1348,7 +1392,7 @@ module Homebrew
 
     json_files = Dir.glob("*.bottle.json")
     bottles_hash = json_files.reduce({}) do |hash, json_file|
-      deep_merge_hashes hash, JSON.parse(IO.read(json_file))
+      hash.deep_merge(JSON.parse(IO.read(json_file)))
     end
 
     if ARGV.include?("--dry-run")
@@ -1555,12 +1599,14 @@ module Homebrew
     ENV["HOMEBREW_NO_AUTO_UPDATE"] = "1"
     ENV["HOMEBREW_NO_EMOJI"] = "1"
     ENV["HOMEBREW_FAIL_LOG_LINES"] = "150"
-    ENV["PATH"] =
+    ENV["HOMEBREW_PATH"] = ENV["PATH"] =
       "#{HOMEBREW_PREFIX}/bin:#{HOMEBREW_PREFIX}/sbin:#{ENV["PATH"]}"
 
     travis = !ENV["TRAVIS"].nil?
     if travis
       ARGV << "--verbose" << "--no-pull"
+      ENV["HOMEBREW_TRAVIS_CI"] = "1"
+      ENV["HOMEBREW_TRAVIS_SUDO"] = ENV["TRAVIS_SUDO"]
       ENV["HOMEBREW_COLOR"] = "1"
       ENV["HOMEBREW_VERBOSE_USING_DOTS"] = "1"
     end
@@ -1574,9 +1620,22 @@ module Homebrew
     ARGV << "--ci-auto" if jenkins_pipeline_branch || jenkins_pipeline_pr
     ARGV << "--no-pull" if jenkins_pipeline_branch
 
+    azure_pipelines = !ENV["TF_BUILD"].nil?
+    if azure_pipelines
+      ARGV << "--verbose" << "--ci-auto" << "--no-pull"
+      ENV["HOMEBREW_AZURE_PIPELINES"] = "1"
+      ENV["CI"] = "1"
+      # These cannot be queried at the macOS level on Azure Pipelines.
+      ENV["HOMEBREW_LANGUAGES"] = "en-GB"
+    end
+
+    ENV["HOMEBREW_CODECOV_TOKEN"] = ENV["CODECOV_TOKEN"]
+
     # Only report coverage if build runs on macOS and this is indeed Homebrew,
     # as we don't want this to be averaged with inferior Linux test coverage.
-    if OS.mac? && MacOS.version == :high_sierra && (ENV["CODECOV_TOKEN"] || travis)
+    if OS.mac? &&
+       MacOS.version == :high_sierra &&
+       (ENV["HOMEBREW_CODECOV_TOKEN"] || travis)
       ARGV << "--coverage"
     end
 
@@ -1587,9 +1646,10 @@ module Homebrew
     jenkins_pr ||= jenkins_pipeline_pr
     jenkins_branch = !ENV["GIT_COMMIT"].nil?
     jenkins_branch ||= jenkins_pipeline_branch
+    azure_pipelines_pr = ENV["BUILD_REASON"] == "PullRequest"
 
     if ARGV.include?("--ci-auto")
-      if travis_pr || jenkins_pr
+      if travis_pr || jenkins_pr || azure_pipelines_pr
         ARGV << "--ci-pr"
       elsif travis || jenkins_branch
         ARGV << "--ci-master"
@@ -1603,7 +1663,8 @@ module Homebrew
        ARGV.include?("--ci-testing")
       ARGV << "--cleanup"
       ARGV << "--test-default-formula"
-      ARGV << "--local" << "--junit" if ENV["JENKINS_HOME"]
+      ARGV << "--local" if jenkins
+      ARGV << "--junit" if jenkins || azure_pipelines
     end
 
     ARGV << "--fast" if ARGV.include?("--ci-master")
@@ -1616,14 +1677,15 @@ module Homebrew
     puts "ARGV: #{ARGV.join(" ")}"
 
     return unless ARGV.include?("--local")
-    ENV["HOMEBREW_CACHE"] = "#{ENV["HOME"]}/Library/Caches/Homebrew"
-    mkdir_p ENV["HOMEBREW_CACHE"]
     ENV["HOMEBREW_HOME"] = ENV["HOME"] = "#{Dir.pwd}/home"
-    mkdir_p ENV["HOME"]
+    mkdir_p ENV["HOMEBREW_HOME"]
     ENV["HOMEBREW_LOGS"] = "#{Dir.pwd}/logs"
   end
 
   def test_bot
+    $stdout.sync = true
+    $stderr.sync = true
+
     sanitize_argv_and_env
 
     tap = resolve_test_tap
