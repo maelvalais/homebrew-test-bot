@@ -933,7 +933,7 @@ module Homebrew
       test "brew", "uninstall", "--force", formula_name if formula.installed?
 
       # shared_*_args are applied to both the main and --devel spec
-      shared_install_args = ["--verbose"]
+      shared_install_args = []
       shared_install_args << "--keep-tmp" if ARGV.keep_tmp?
       if !ARGV.include?("--fast") &&
          !ARGV.include?("--no-bottle") &&
@@ -967,8 +967,9 @@ module Homebrew
       install_passed = false
       if !ARGV.include?("--fast") || formula_bottled || formula.bottle_unneeded?
         test "brew", "install", "--only-dependencies", *install_args,
+             ("--verbose" if verbose),
              env: { "HOMEBREW_DEVELOPER" => nil }
-        test "brew", "install", *install_args,
+        test "brew", "install", *install_args, "--verbose",
              env: { "HOMEBREW_DEVELOPER" => nil }
 
         install_passed = steps.last.passed?
