@@ -967,7 +967,6 @@ module Homebrew
       install_passed = false
       if !ARGV.include?("--fast") || formula_bottled || formula.bottle_unneeded?
         test "brew", "install", "--only-dependencies", *install_args,
-             ("--verbose" if verbose),
              env: { "HOMEBREW_DEVELOPER" => nil }
         test "brew", "install", *install_args, "--verbose",
              env: { "HOMEBREW_DEVELOPER" => nil }
