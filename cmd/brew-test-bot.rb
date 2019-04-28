@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 #:  * `test-bot` [options]  <url|formula>:
 #:    Tests the full lifecycle of a formula or Homebrew/brew change.
 #:
@@ -139,9 +141,19 @@ module Homebrew
 
   HOMEBREW_TAP_REGEX = %r{^([\w-]+)/homebrew-([\w-]+)$}.freeze
 
-  REQUIRED_TAPS = [CoreTap.instance.name] + %w[
+  REQUIRED_HOMEBREW_TAPS = [CoreTap.instance.name] + %w[
     homebrew/test-bot
   ].freeze
+
+  REQUIRED_LINUXBREW_TAPS = REQUIRED_HOMEBREW_TAPS + %w[
+    linuxbrew/xorg
+  ].freeze
+
+  REQUIRED_TAPS = if OS.mac? || ENV["HOMEBREW_FORCE_HOMEBREW_ON_LINUX"]
+    REQUIRED_HOMEBREW_TAPS
+  else
+    REQUIRED_LINUXBREW_TAPS
+  end
 
   REQUIRED_TEST_BREW_TAPS = REQUIRED_TAPS + %w[
     homebrew/cask
@@ -175,7 +187,7 @@ module Homebrew
       ENV["BUILD_REPOSITORY_URI"]
     return unless git_url
 
-    url_path = git_url.sub(%r{^https?://github\.com/}, "")
+    url_path = git_url.sub(%r{^https?://.*github\.com/}, "")
                       .chomp("/")
                       .sub(/\.git$/, "")
     begin
@@ -213,6 +225,7 @@ module Homebrew
       file = "#{@category}.#{@name}.txt"
       root = @test.log_root
       return file unless root
+
       root + file
     end
 
@@ -370,6 +383,7 @@ module Homebrew
       Formulary.factory(formula_name).full_name
     rescue TapFormulaUnavailableError => e
       raise if e.tap.installed?
+
       test "brew", "tap", e.tap.name
       retry unless steps.last.failed?
       onoe e
@@ -387,15 +401,21 @@ module Homebrew
 
     def diff_formulae(start_revision, end_revision, path, filter)
       return unless @tap
+
       Utils.popen_read(
         "git", "-C", @repository,
                "diff-tree", "-r", "--name-only", "--diff-filter=#{filter}",
                start_revision, end_revision, "--", path
-             ).lines.map do |line|
+      ).lines.map do |line|
         file = Pathname.new line.chomp
         next unless @tap.formula_file?(file)
+
         @tap.formula_file_to_name(file)
       end.compact
+    end
+
+    def merge_commit?(commit)
+      Utils.popen_read("git", "-C", @repository, "rev-list", "--parents", "-n1", commit).count(" ") > 1
     end
 
     def download
@@ -524,11 +544,11 @@ module Homebrew
       brew_version = Utils.popen_read(
         "git", "-C", HOMEBREW_REPOSITORY.to_s,
                "describe", "--tags", "--abbrev", "--dirty"
-             ).strip
+      ).strip
       brew_commit_subject = Utils.popen_read(
         "git", "-C", HOMEBREW_REPOSITORY.to_s,
                "log", "-1", "--format=%s"
-             ).strip
+      ).strip
       puts "Homebrew/brew #{brew_version} (#{brew_commit_subject})"
       if @tap.to_s != CoreTap.instance.name
         core_path = CoreTap.instance.path
@@ -546,19 +566,19 @@ module Homebrew
         core_revision = Utils.popen_read(
           "git", "-C", core_path.to_s,
                  "log", "-1", "--format=%h (%s)"
-               ).strip
+        ).strip
         puts "#{CoreTap.instance.full_name} #{core_revision}"
       end
       if @tap
         tap_origin_master_revision = Utils.popen_read(
           "git", "-C", @tap.path.to_s,
                  "log", "-1", "--format=%h (%s)", "origin/master"
-               ).strip
+        ).strip
         puts "#{@tap} origin/master #{tap_origin_master_revision}"
         tap_revision = Utils.popen_read(
           "git", "-C", @tap.path.to_s,
                  "log", "-1", "--format=%h (%s)"
-               ).strip
+        ).strip
         puts "#{@tap} HEAD #{tap_revision}"
       end
 
@@ -569,8 +589,14 @@ module Homebrew
         formula_path = @tap.formula_dir.to_s
         @added_formulae +=
           diff_formulae(diff_start_sha1, diff_end_sha1, formula_path, "A")
-        @modified_formulae +=
-          diff_formulae(diff_start_sha1, diff_end_sha1, formula_path, "M")
+        if merge_commit? diff_end_sha1
+          # Test formulae whose bottles were updated.
+          summaries = Utils.popen_read("git", "-C", @repository, "log", "--pretty=%s", "#{diff_start_sha1}..#{diff_end_sha1}").lines
+          @modified_formulae = summaries.map { |s| s[/^([^:]+): update .* bottle\.$/, 1] }.compact.uniq
+        else
+          @modified_formulae +=
+            diff_formulae(diff_start_sha1, diff_end_sha1, formula_path, "M")
+        end
         @deleted_formulae +=
           diff_formulae(diff_start_sha1, diff_end_sha1, formula_path, "D")
       elsif @formulae.empty? && ARGV.include?("--test-default-formula")
@@ -610,6 +636,7 @@ module Homebrew
     def setup
       @category = __method__
       return if @skip_setup
+
       # install newer Git when needed
       if OS.mac? && MacOS.version < :sierra
         test "brew", "install", "git"
@@ -624,6 +651,7 @@ module Homebrew
       deps.each { |d| d.to_formula.recursive_dependencies }
     rescue TapFormulaUnavailableError => e
       raise if e.tap.installed?
+
       e.tap.clear_cache
       safe_system "brew", "tap", e.tap.name
       retry
@@ -677,6 +705,7 @@ module Homebrew
         unlink_formula = Formulary.factory(name)
         next unless unlink_formula.installed?
         next unless unlink_formula.linked_keg.exist?
+
         test "brew", "unlink", name
       end
 
@@ -690,6 +719,7 @@ module Homebrew
         link_formula = Formulary.factory(name)
         next if link_formula.keg_only?
         next if link_formula.linked_keg.exist?
+
         test "brew", "link", name
       end
 
@@ -720,7 +750,7 @@ module Homebrew
       @unchanged_build_dependencies = build_dependencies - @formulae
 
       dependents =
-        Utils.popen_read("brew", "uses", "--recursive", formula_name)
+        Utils.popen_read("brew", "uses", "--include-test", "--recursive", formula_name)
              .split("\n")
       dependents -= @formulae
       dependents = dependents.map { |d| Formulary.factory(d) }
@@ -734,12 +764,14 @@ module Homebrew
     def unlink_conflicts(formula)
       return if formula.keg_only?
       return if formula.linked_keg.exist?
+
       conflicts = formula.conflicts.map { |c| Formulary.factory(c.name) }
                          .select(&:installed?)
       formula_recursive_dependencies = begin
         formula.recursive_dependencies
       rescue TapFormulaUnavailableError => e
         raise if e.tap.installed?
+
         e.tap.clear_cache
         safe_system "brew", "tap", e.tap.name
         retry
@@ -756,6 +788,7 @@ module Homebrew
 
     def cleanup_bottle_etc_var(formula)
       return unless ARGV.include? "--cleanup"
+
       bottle_prefix = formula.opt_prefix/".bottle"
       # Nuke etc/var to have them be clean to detect bottle etc/var
       # file additions.
@@ -825,6 +858,7 @@ module Homebrew
         test "brew", "fetch", "--retry", dependent.name
 
         return if steps.last.failed?
+
         unlink_conflicts dependent
         unless ARGV.include?("--fast")
           test "brew", "install", "--only-dependencies", dependent.name,
@@ -835,6 +869,7 @@ module Homebrew
         end
       end
       return unless dependent.installed?
+
       if !dependent.keg_only? && !dependent.linked_keg.exist?
         unlink_conflicts dependent
         test "brew", "link", dependent.name
@@ -961,6 +996,7 @@ module Homebrew
 
       if install_passed
         bottle_reinstall_formula(formula, new_formula)
+        test "brew", "linkage", "--test", formula_name
 
         if formula.test_defined?
           test "brew", "install", "--only-dependencies", "--include-test",
@@ -1008,6 +1044,7 @@ module Homebrew
       end
 
       return if @unchanged_dependencies.empty?
+
       test "brew", "uninstall", "--force", *@unchanged_dependencies
     end
 
@@ -1041,7 +1078,7 @@ module Homebrew
 
         test "brew", "readall", "--aliases"
 
-        if OS.linux?
+        if OS.mac?
           test "brew", "tests", "--no-compat", "--online"
           test "brew", "tests", "--generic", "--online"
         end
@@ -1082,6 +1119,7 @@ module Homebrew
       return if Utils.popen_read(
         "git", "-C", repository, "clean", "--dry-run", *clean_args
       ).strip.empty?
+
       test "git", "-C", repository, "clean", "-ff", *clean_args
     end
 
@@ -1089,6 +1127,7 @@ module Homebrew
       return unless Utils.popen_read(
         "git -C '#{repository}' -c gc.autoDetach=false gc --auto 2>&1",
       ).include?("git prune")
+
       test "git", "-C", repository, "prune"
     end
 
@@ -1097,6 +1136,7 @@ module Homebrew
         "git", "-C", repository, "symbolic-ref", "--short", "HEAD"
       ).strip
       return if branch == current_branch
+
       checkout_args = [branch]
       checkout_args << "-f" if ARGV.include? "--cleanup"
       test "git", "-C", repository, "checkout", *checkout_args
@@ -1122,6 +1162,7 @@ module Homebrew
         elsif REQUIRED_TAPS.include?(tap_name)
           next
         end
+
         test "brew", "untap", tap_name
       end
 
@@ -1131,6 +1172,7 @@ module Homebrew
         next if path == HOMEBREW_PREFIX/"bin/brew"
         next if path == HOMEBREW_PREFIX/"var"
         next if path == HOMEBREW_PREFIX/"var/homebrew"
+
         path_string = path.to_s
         next if path_string.start_with?(HOMEBREW_REPOSITORY.to_s)
         next if path_string.start_with?(@brewbot_root.to_s)
@@ -1139,6 +1181,7 @@ module Homebrew
         next if path_string.match?(
           "(include|lib)/(lib|osxfuse/|pkgconfig/)?(osx|mac)?fuse(.*\.(dylib|h|la|pc))?$",
         )
+
         FileUtils.rm_rf path
       end
 
@@ -1151,6 +1194,7 @@ module Homebrew
       Pathname.glob("#{HOMEBREW_LIBRARY}/Taps/*/*").each do |git_repo|
         cleanup_git_meta(git_repo)
         next if @repository == git_repo
+
         checkout_branch_if_needed(git_repo)
         reset_if_needed(git_repo)
         prune_if_needed(git_repo)
@@ -1275,6 +1319,7 @@ module Homebrew
           end
         rescue TapFormulaUnavailableError => e
           raise if e.tap.installed?
+
           e.tap.clear_cache
           safe_system "brew", "tap", e.tap.name
           retry
@@ -1302,12 +1347,14 @@ module Homebrew
       return false unless formula.head
       return false if formula.devel
       return false if formula.stable
+
       formula.tap.to_s.downcase !~ %r{[-/]head-only$}
     end
 
     def devel_only_tap?(formula)
       return false unless formula.devel
       return false if formula.stable
+
       formula.tap.to_s.downcase !~ %r{[-/]devel-only$}
     end
 
@@ -1373,7 +1420,7 @@ module Homebrew
 
     ARGV << "--verbose"
 
-    copy_bottles_from_jenkins if !ENV["JENKINS_HOME"].nil?
+    copy_bottles_from_jenkins unless ENV["JENKINS_HOME"].nil?
 
     raise "No bottles found in #{Dir.pwd}!" if Dir["*.bottle*.*"].empty? && !ARGV.include?("--dry-run")
 
@@ -1615,7 +1662,7 @@ module Homebrew
     if azure_pipelines
       ARGV << "--verbose" << "--ci-auto" << "--no-pull"
       ENV["HOMEBREW_AZURE_PIPELINES"] = "1"
-      ENV["HOMEBREW_COLOR"] = "1"
+      ENV["HOMEBREW_NO_COLOR"] = "1"
       # These cannot be queried at the macOS level on Azure Pipelines.
       ENV["HOMEBREW_LANGUAGES"] = "en-GB"
     end
@@ -1668,11 +1715,12 @@ module Homebrew
     test_bot_revision = Utils.popen_read(
       "git", "-C", Tap.fetch("homebrew/test-bot").path.to_s,
              "log", "-1", "--format=%h (%s)"
-           ).strip
+    ).strip
     puts "Homebrew/homebrew-test-bot #{test_bot_revision}"
     puts "ARGV: #{ARGV.join(" ")}"
 
     return unless ARGV.include?("--local")
+
     ENV["HOMEBREW_HOME"] = ENV["HOME"] = "#{Dir.pwd}/home"
     mkdir_p ENV["HOMEBREW_HOME"]
     ENV["HOMEBREW_LOGS"] = "#{Dir.pwd}/logs"
@@ -1766,6 +1814,7 @@ module Homebrew
           testcase.add_attribute "timestamp", step.start_time.iso8601
 
           next unless step.output?
+
           output = sanitize_output_for_xml(step.output)
           cdata = REXML::CData.new output
 
